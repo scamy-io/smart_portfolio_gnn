@@ -1,0 +1,17 @@
+model:
+  node_features: 32
+  hidden_dim: 64
+  out_dim: 64
+  num_heads: 4
+  dropout: 0.2
+  num_layers: 3
+loss:
+  lambda_vol: 1.0
+  lambda_ret: 1.0
+  lambda_cvar: 1.0
+  lambda_reg: 1e-4
+training:
+  epochs: 50
+  lr: 0.001
+  weight_decay: 1e-5
+  batch_size: 32

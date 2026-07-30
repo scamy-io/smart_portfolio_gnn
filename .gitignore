@@ -1,0 +1,35 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data and Models
+/data/
+/models/
+/raw/
+processed/
+*.parquet
+*.pt
+*.csv
+*.zip
+
+# Logs and Reports
+logs/
+reports/
+*.log
+
+# C environment
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Project specific
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.DS_Store

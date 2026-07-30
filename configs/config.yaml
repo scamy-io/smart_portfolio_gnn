@@ -1,0 +1,14 @@
+version: "1.0.0"
+data:
+  window_size: 25
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  top_k: 15
+  threshold: 0.3
+rebalancing:
+  transaction_cost_rate: 0.001
+  max_weight: 0.05
+  target_hhi: 0.02
+  min_enb: 15.0
+evaluation:
+  window: 63

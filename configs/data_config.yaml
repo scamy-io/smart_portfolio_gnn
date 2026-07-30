@@ -1,0 +1,32 @@
+paths:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  external_dir: "data/external"
+universe:
+  source: "sp500"
+  max_stocks: 2
+  tickers_file: "" # optional override
+date_range:
+  start: "2024-01-01"
+  end: "2024-01-31"
+yfinance:
+  batch_size: 50
+  sleep_between_batches: 1.0
+  retry_attempts: 3
+gdelt:
+  tone_columns: ["overall", "positive", "negative", "polarity", "activity", "self_group"]
+  entity_match_threshold: 80
+  decay_halflife_days: 3
+features:
+  technical_indicators:
+    - "sma_5"
+    - "sma_20"
+    - "rsi_14"
+    - "macd"
+    - "bb_upper"
+    - "bb_lower"
+    - "volatility_21d"
+    - "momentum_12m"
+logging:
+  level: "INFO"
+  file: "logs/data_pipeline.log"

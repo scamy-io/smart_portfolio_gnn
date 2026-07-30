@@ -1,0 +1,72 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install black isort flake8
+      - name: Lint with black
+        run: black --check src tests dashboard scripts
+      - name: Lint with isort
+        run: isort --check-only src tests dashboard scripts
+      - name: Lint with flake8
+        run: flake8 src tests dashboard scripts
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch==2.1.2+cpu --index-url https://download.pytorch.org/whl/cpu
+          pip install torch_scatter torch_sparse torch_geometric -f https://data.pyg.org/whl/torch-2.1.2+cpu.html
+          pip install -r requirements.txt
+          pip install pytest pytest-mock pytest-cov
+      - name: Run pytest with coverage
+        run: |
+          pip install "numpy<2.0.0"
+          PYTHONPATH=. python -m pytest tests/ -v --cov=src --cov-fail-under=10 --cov-report=term-missing
+
+  build:
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        # docker build is handled by the action below
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository }}/smart-portfolio-gnn:latest
