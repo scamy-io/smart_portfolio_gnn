@@ -15,6 +15,9 @@ class IncrementalGraphUpdater:
         self.graph = base_graph.clone()
         self.window_size = window_size
         self.device = device
+        
+        import logging
+        self.logger = logging.getLogger(__name__)
 
         self.num_nodes = self.graph["stock"].x.shape[0]
 
@@ -76,6 +79,10 @@ class IncrementalGraphUpdater:
         return corr
 
     def update_correlation_edges(self) -> HeteroData:
+        old_ei = self.graph["stock", "correlates_with", "stock"].edge_index
+        if old_ei is None:
+            old_ei = torch.empty((2, 0), dtype=torch.long)
+        
         corr = self._get_correlation_matrix()
 
         # Zero out diagonal
@@ -114,11 +121,25 @@ class IncrementalGraphUpdater:
 
         self.graph["stock", "correlates_with", "stock"].edge_index = edge_index
         self.graph["stock", "correlates_with", "stock"].edge_attr = edge_attr
+        
+        # Track edge deltas
+        old_set = set(map(tuple, old_ei.t().tolist()))
+        new_set = set(map(tuple, edge_index.t().tolist()))
+        added = new_set - old_set
+        removed = old_set - new_set
+        affected = set(u for u, _ in added | removed) | set(v for _, v in added | removed)
+        self.logger.info(f"Correlation Edges Delta -> Added: {len(added)}, Removed: {len(removed)}, Affected Nodes: {len(affected)}")
+        self.edge_deltas = {"correlates_with": {"added": len(added), "removed": len(removed), "affected_nodes": list(affected)}}
+        
         return self.graph
 
     def update_sentiment_edges(
         self, news_batch: List[Dict], ticker_to_idx: Dict[str, int]
     ) -> HeteroData:
+        old_ei = self.graph["stock", "sentiment_co_mention", "stock"].edge_index
+        if old_ei is None:
+            old_ei = torch.empty((2, 0), dtype=torch.long)
+            
         current_time = time.time()
 
         # Decay existing edges
@@ -193,6 +214,18 @@ class IncrementalGraphUpdater:
             self.graph["stock", "sentiment_co_mention", "stock"].edge_attr = (
                 torch.empty((0, 1), dtype=torch.float32)
             )
+
+        new_ei = self.graph["stock", "sentiment_co_mention", "stock"].edge_index
+        old_set = set(map(tuple, old_ei.t().tolist()))
+        new_set = set(map(tuple, new_ei.t().tolist()))
+        added = new_set - old_set
+        removed = old_set - new_set
+        affected = set(u for u, _ in added | removed) | set(v for _, v in added | removed)
+        self.logger.info(f"Sentiment Co-mention Edges Delta -> Added: {len(added)}, Removed: {len(removed)}, Affected Nodes: {len(affected)}")
+        
+        if not hasattr(self, "edge_deltas"):
+            self.edge_deltas = {}
+        self.edge_deltas["sentiment_co_mention"] = {"added": len(added), "removed": len(removed), "affected_nodes": list(affected)}
 
         return self.graph
 

@@ -11,6 +11,7 @@ class CorrelationEdgeBuilder:
         self,
         prices_df: pd.DataFrame,
         window: int = 21,
+        window_medium: int = 63,
         threshold: float = 0.3,
         top_k: int = 15,
     ):
@@ -20,6 +21,7 @@ class CorrelationEdgeBuilder:
                 self.prices_df["date"]
             ).dt.tz_localize(None)
         self.window = window
+        self.window_medium = window_medium
         self.threshold = threshold
         self.top_k = top_k
         self.logger = logging.getLogger(__name__)
@@ -38,43 +40,46 @@ class CorrelationEdgeBuilder:
         returns_pivot = df_up_to_date.pivot(
             index="date", columns="ticker", values="log_return"
         )
-        returns_window = returns_pivot.loc[:end_date].tail(self.window)
-
-        if len(returns_window) < 2:
-            return pd.DataFrame()
-
-        returns_window = returns_window.dropna(axis=1)
-        if returns_window.empty:
-            return pd.DataFrame()
-
-        corr_matrix = returns_window.corr(method="pearson")
-
+        
         edges = []
-        tickers = sorted(corr_matrix.columns)
-        for src in tickers:
-            corrs = corr_matrix.loc[src].drop(src)
-            valid_corrs = corrs[corrs.abs() >= self.threshold]
-            if valid_corrs.empty:
+        
+        for w, etype in [(self.window, "correlates_with"), (self.window_medium, "correlates_with_63d")]:
+            returns_window = returns_pivot.loc[:end_date].tail(w)
+
+            if len(returns_window) < 2:
                 continue
 
-            valid_corrs = valid_corrs.reset_index()
-            valid_corrs.columns = ["target", "weight"]
-            valid_corrs["abs_weight"] = valid_corrs["weight"].abs()
-            valid_corrs = valid_corrs.sort_values(
-                by=["abs_weight", "target"], ascending=[False, True]
-            ).head(self.top_k)
+            returns_window = returns_window.dropna(axis=1)
+            if returns_window.empty:
+                continue
 
-            for _, row in valid_corrs.iterrows():
-                edges.append(
-                    {
-                        "date": date,
-                        "source": src,
-                        "target": row["target"],
-                        "weight": row["weight"],
-                        "edge_type": "correlates_with",
-                        "window": self.window,
-                    }
-                )
+            corr_matrix = returns_window.corr(method="pearson")
+
+            tickers = sorted(corr_matrix.columns)
+            for src in tickers:
+                corrs = corr_matrix.loc[src].drop(src)
+                valid_corrs = corrs[corrs.abs() >= self.threshold]
+                if valid_corrs.empty:
+                    continue
+
+                valid_corrs = valid_corrs.reset_index()
+                valid_corrs.columns = ["target", "weight"]
+                valid_corrs["abs_weight"] = valid_corrs["weight"].abs()
+                valid_corrs = valid_corrs.sort_values(
+                    by=["abs_weight", "target"], ascending=[False, True]
+                ).head(self.top_k)
+
+                for _, row in valid_corrs.iterrows():
+                    edges.append(
+                        {
+                            "date": date,
+                            "source": src,
+                            "target": row["target"],
+                            "weight": row["weight"],
+                            "edge_type": etype,
+                            "window": w,
+                        }
+                    )
 
         return pd.DataFrame(edges)
 

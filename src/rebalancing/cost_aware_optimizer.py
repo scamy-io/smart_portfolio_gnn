@@ -69,6 +69,12 @@ class CostAwareOptimizer:
             cp.sum_squares(w) <= self.target_hhi,
         ]
 
+        if Sigma_gnn is not None:
+            # Approximation: PCA eigenvectors used as torsion matrix. Full Meucci minimum torsion deferred to Phase 4.
+            # ENB_embed = 1 / (w^T Sigma_gnn w)
+            # ENB_embed >= min_enb  =>  w^T Sigma_gnn w <= 1 / min_enb
+            constraints.append(cp.quad_form(w, cp.psd_wrap(Sigma_gnn)) <= 1.0 / self.min_enb)
+
         prob = cp.Problem(objective, constraints)
 
         try:

@@ -22,6 +22,11 @@ class HTGAT(nn.Module):
         num_layers: int = 3,
     ):
         super().__init__()
+        
+        # Ensure 63-day edge type is covered
+        if ("stock", "correlates_with_63d", "stock") not in edge_types:
+            edge_types.append(("stock", "correlates_with_63d", "stock"))
+            
         self.num_layers = num_layers
 
         self.convs = nn.ModuleList()

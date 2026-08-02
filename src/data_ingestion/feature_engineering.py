@@ -137,7 +137,38 @@ class FeatureEngineer:
         if fundamentals_df is not None:
             self.merge_fundamentals(fundamentals_df)
 
-        self.prices_df["vix_level"] = 0.0
+        vix_path = self.output_dir.parent.parent / "raw/macro/VIXCLS.csv"
+        import os
+        if vix_path.exists():
+            vix_df = pd.read_csv(vix_path)
+            vix_df["DATE"] = pd.to_datetime(vix_df["DATE"])
+            vix_df.rename(columns={"DATE": "date", "VIXCLS": "vix_level"}, inplace=True)
+            self.prices_df = pd.merge(self.prices_df, vix_df, on="date", how="left")
+            self.prices_df["vix_level"] = self.prices_df["vix_level"].ffill().bfill()
+            
+        if "vix_level" not in self.prices_df.columns or self.prices_df["vix_level"].isna().all():
+            if os.environ.get("SMART_PORTFOLIO_OFFLINE_MODE") == "1":
+                self.prices_df["vix_level"] = 20.0
+            else:
+                raise ValueError("VIX data missing after macro merge. Run macro_fetcher first or set SMART_PORTFOLIO_OFFLINE_MODE=1")
+                
+        if self.prices_df["vix_level"].isna().any():
+            if os.environ.get("SMART_PORTFOLIO_OFFLINE_MODE") == "1":
+                self.prices_df["vix_level"] = self.prices_df["vix_level"].fillna(20.0)
+            else:
+                raise ValueError("VIX contains NaN after forward-fill")
+
+        sentiment_features_path = self.output_dir.parent / "sentiment_node_features.parquet"
+        if sentiment_features_path.exists():
+            self.logger.info("Merging sentiment node features...")
+            sentiment_df = pd.read_parquet(sentiment_features_path)
+            sentiment_df["date"] = pd.to_datetime(sentiment_df["date"])
+            self.prices_df = pd.merge(self.prices_df, sentiment_df, on=["date", "ticker"], how="left")
+            self.prices_df["NumMentions"] = self.prices_df["NumMentions"].fillna(0.0)
+            self.prices_df["ToneDispersion"] = self.prices_df["ToneDispersion"].fillna(0.0)
+        else:
+            self.prices_df["NumMentions"] = 0.0
+            self.prices_df["ToneDispersion"] = 0.0
 
         self.logger.info("Normalizing features...")
         exclude_cols = [

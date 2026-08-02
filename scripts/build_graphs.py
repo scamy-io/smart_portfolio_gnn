@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 import argparse
 import logging
 import sys
@@ -44,12 +46,16 @@ def main():
 
     try:
         prices_df = pd.read_parquet("data/raw/prices/ohlcv.parquet")
+        if "tickers" in config:
+            prices_df = prices_df[prices_df["ticker"].isin(config["tickers"])]
     except Exception as e:
         logger.error(f"Failed to load prices: {e}")
         return
 
     try:
         fundamentals_df = pd.read_parquet("data/raw/fundamentals/fundamentals.parquet")
+        if "tickers" in config and not fundamentals_df.empty:
+            fundamentals_df = fundamentals_df[fundamentals_df["ticker"].isin(config["tickers"])]
     except Exception:
         fundamentals_df = pd.DataFrame()
 
@@ -104,6 +110,17 @@ def main():
             logger.error(f"Failed to build sentiment edges: {e}")
 
     logger.info("Building TemporalGraphDataset snapshots...")
+    
+    # Also filter node_features.parquet for the dataset
+    try:
+        nf_df = pd.read_parquet("data/processed/node_features.parquet").reset_index()
+        if "tickers" in config:
+            nf_df = nf_df[nf_df["ticker"].isin(config["tickers"])]
+        nf_df.set_index(["date", "ticker"]).to_parquet("data/processed/node_features_dry_run.parquet")
+        nf_path = Path("data/processed/node_features_dry_run.parquet")
+    except Exception:
+        nf_path = Path("data/processed/node_features.parquet")
+
     edge_paths = {
         "correlates_with": Path("data/processed/edges/correlation_edges.parquet"),
         "sentiment_co_mention": Path("data/processed/edges/sentiment_edges.parquet"),
@@ -116,7 +133,7 @@ def main():
 
     dataset = TemporalGraphDataset(
         graph_snapshot_dir=Path("data/processed/graph_snapshots"),
-        node_features_path=Path("data/processed/node_features.parquet"),
+        node_features_path=nf_path,
         edge_paths=edge_paths,
     )
     dataset.build_snapshots(dates)

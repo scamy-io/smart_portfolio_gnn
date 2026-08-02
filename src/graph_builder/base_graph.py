@@ -28,7 +28,7 @@ class StockGraph:
         self.node_features = self.node_features.reindex(self.tickers).fillna(0)
         data["stock"].x = torch.tensor(self.node_features.values, dtype=torch.float32)
 
-        for edge_type, edge_df in self.edge_dataframes.items():
+        for default_edge_type, edge_df in self.edge_dataframes.items():
             if edge_df.empty:
                 continue
 
@@ -39,22 +39,39 @@ class StockGraph:
             if valid_edges.empty:
                 continue
 
-            src_indices = valid_edges["source"].map(self.ticker_to_idx).values
-            tgt_indices = valid_edges["target"].map(self.ticker_to_idx).values
-            weights = valid_edges["weight"].values
+            if "edge_type" in valid_edges.columns:
+                for actual_edge_type, group in valid_edges.groupby("edge_type"):
+                    src_indices = group["source"].map(self.ticker_to_idx).values
+                    tgt_indices = group["target"].map(self.ticker_to_idx).values
+                    weights = group["weight"].values
 
-            edge_index = torch.tensor([src_indices, tgt_indices], dtype=torch.long)
-            edge_attr = torch.tensor(weights, dtype=torch.float32).unsqueeze(1)
+                    edge_index = torch.tensor([src_indices, tgt_indices], dtype=torch.long)
+                    edge_attr = torch.tensor(weights, dtype=torch.float32).unsqueeze(1)
 
-            data["stock", edge_type, "stock"].edge_index = edge_index
-            data["stock", edge_type, "stock"].edge_attr = edge_attr
+                    data["stock", actual_edge_type, "stock"].edge_index = edge_index
+                    data["stock", actual_edge_type, "stock"].edge_attr = edge_attr
+            else:
+                src_indices = valid_edges["source"].map(self.ticker_to_idx).values
+                tgt_indices = valid_edges["target"].map(self.ticker_to_idx).values
+                weights = valid_edges["weight"].values
+
+                edge_index = torch.tensor([src_indices, tgt_indices], dtype=torch.long)
+                edge_attr = torch.tensor(weights, dtype=torch.float32).unsqueeze(1)
+
+                data["stock", default_edge_type, "stock"].edge_index = edge_index
+                data["stock", default_edge_type, "stock"].edge_attr = edge_attr
 
         data.date = self.date
         return data
 
     def get_metadata(self) -> Tuple[List[str], List[Tuple]]:
-        edge_types = list(self.edge_dataframes.keys())
-        return (["stock"], [("stock", et, "stock") for et in edge_types])
+        edge_types = set()
+        for default_et, edge_df in self.edge_dataframes.items():
+            if not edge_df.empty and "edge_type" in edge_df.columns:
+                edge_types.update(edge_df["edge_type"].unique().tolist())
+            else:
+                edge_types.add(default_et)
+        return (["stock"], [("stock", et, "stock") for et in sorted(list(edge_types))])
 
     def validate(self) -> bool:
         is_valid = True

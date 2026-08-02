@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 import argparse
 import json
 import logging
@@ -60,9 +62,10 @@ def main():
         ),
     }
 
+    nf_path = Path("data/processed/node_features_dry_run.parquet") if "tickers" in config else Path("data/processed/node_features.parquet")
     dataset = TemporalGraphDataset(
         graph_snapshot_dir=Path("data/processed/graph_snapshots"),
-        node_features_path=Path("data/processed/node_features.parquet"),
+        node_features_path=nf_path,
         edge_paths=edge_paths,
     )
 
@@ -77,33 +80,54 @@ def main():
             model.load_state_dict(checkpoint["model_state_dict"])
     else:
         logger.error("Dataset empty")
+        model.eval()
+
+    # DRY RUN CONFIG
+    start_date = config.get("date_range", {}).get("start", args.start)
+    end_date = config.get("date_range", {}).get("end", args.end)
+    transaction_cost_bps = config.get("backtest", {}).get("transaction_cost_bps", 10.0)
+    rebalance_frequency = config.get("backtest", {}).get("rebalance_frequency", "weekly")
+
+    logger.info(f"Running backtest from {start_date} to {end_date}...")
+    backtester = WalkForwardBacktester(
+        model=model,
+        dataset=dataset,
+        config=config,
+        rebalance_frequency=rebalance_frequency,
+        transaction_cost_bps=transaction_cost_bps,
+    )
+
+    df_history = backtester.run(start_date=start_date, end_date=end_date)
+    if df_history is None or df_history.empty:
+        logger.error("Backtest returned no history. Check dates and data availability.")
         return
 
-    logger.info(f"Running backtest from {args.start} to {args.end}...")
-    bt = WalkForwardBacktester(model, dataset, config)
-    port_df = bt.run(args.start, args.end)
+    logger.info("Computing metrics...")
+    metrics = compute_all_metrics(df_history)
 
-    bm_ret = bt.get_benchmark_returns(
-        args.benchmark, port_df.index.astype(str).tolist()
-    )
-    bm_df = pd.DataFrame({"portfolio_return": bm_ret})
-    bm_df.index = port_df.index
+    # Calculate Benchmark Returns
+    benchmark_rets = {}
+    for b_name in ["equal_weight", "market_cap", "har_min_variance"]:
+        b_ret = backtester.get_benchmark_returns(b_name, list(df_history.index.astype(str)))
+        benchmark_rets[b_name] = b_ret.values
 
-    metrics = compute_all_metrics(port_df, bm_df)
+    df_history["benchmark_ew"] = benchmark_rets["equal_weight"]
+    df_history["benchmark_mc"] = benchmark_rets["market_cap"]
+    df_history["benchmark_har"] = benchmark_rets["har_min_variance"]
+
+    logger.info("\n--- BACKTEST RESULTS ---")
 
     if args.ablation:
         logger.info("Running ablation studies...")
-        ab_study = AblationStudy(config, bt, args.start, args.end)
+        ab_study = AblationStudy(config, backtester, start_date, end_date)
         ab_df = ab_study.run_all()
 
     logger.info("Generating plots...")
-    plot_cumulative_returns(port_df, bm_df, args.output_dir / "cumulative_returns.png")
-    plot_drawdown(port_df, args.output_dir / "drawdown.png")
-    plot_rolling_sharpe(port_df, output_path=args.output_dir / "rolling_sharpe.png")
+    plot_rolling_sharpe(df_history, output_path=args.output_dir / "rolling_sharpe.png")
 
-    report = {"start_date": args.start, "end_date": args.end, "metrics": metrics}
+    report = {"start_date": start_date, "end_date": end_date, "metrics": metrics}
 
-    with open(args.output_dir / f"backtest_{args.start}_{args.end}.json", "w") as f:
+    with open(args.output_dir / f"backtest_{start_date}_{end_date}.json", "w") as f:
         json.dump(report, f, indent=2)
 
     print("\n" + "=" * 50)

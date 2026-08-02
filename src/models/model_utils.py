@@ -50,8 +50,8 @@ class PortfolioLoss(nn.Module):
         )
 
         if model is not None and self.lambda_reg > 0:
-            l2_reg = sum(p.norm(2) for p in model.parameters())
-            total_loss += self.lambda_reg * l2_reg
+            l1_att = sum(p.norm(1) for name, p in model.named_parameters() if "att" in name)
+            total_loss += self.lambda_reg * l1_att
 
         return total_loss
 
@@ -59,8 +59,10 @@ class PortfolioLoss(nn.Module):
 def train_epoch(model, loader, optimizer, criterion, device) -> float:
     model.train()
     total_loss = 0.0
+    total_valid_samples = 0
+    total_possible_samples = 0
 
-    for batch in loader:
+    for batch_idx, batch in enumerate(loader):
         batch = batch.to(device)
         batch_targets = {
             "volatility": batch.volatility,
@@ -74,7 +76,21 @@ def train_epoch(model, loader, optimizer, criterion, device) -> float:
         optimizer.zero_grad()
 
         preds = model(batch)
-        loss = criterion(preds, batch_targets, model=model)
+        
+        # Mask out NaN targets to prevent loss explosion
+        valid_mask = ~torch.isnan(batch_targets["return"]) & ~torch.isnan(batch_targets["volatility"]) & ~torch.isnan(batch_targets["cvar"])
+        
+        total_possible_samples += valid_mask.size(0)
+        total_valid_samples += valid_mask.sum().item()
+        
+        if valid_mask.sum() == 0:
+            print(f"WARNING: Batch {batch_idx} has zero valid targets across all three heads. Skipping.")
+            continue
+            
+        filtered_preds = {k: v[valid_mask] if k in ["volatility", "return", "cvar"] else v for k, v in preds.items()}
+        filtered_targets = {k: v[valid_mask] for k, v in batch_targets.items()}
+
+        loss = criterion(filtered_preds, filtered_targets, model=model)
         loss.backward()
 
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -82,7 +98,8 @@ def train_epoch(model, loader, optimizer, criterion, device) -> float:
         optimizer.step()
         total_loss += loss.item()
 
-    return total_loss / len(loader)
+    print(f"Epoch valid samples: {total_valid_samples} valid targets processed out of {total_possible_samples} possible")
+    return total_loss / len(loader) if len(loader) > 0 else float('nan')
 
 
 def evaluate(model, loader, criterion, device) -> Dict[str, float]:
@@ -111,29 +128,47 @@ def evaluate(model, loader, criterion, device) -> Dict[str, float]:
                 batch_targets = {k: v.to(device) for k, v in batch_targets.items()}
 
             preds = model(batch)
-            loss = criterion(preds, batch_targets)
+            
+            valid_mask = ~torch.isnan(batch_targets["return"])
+            if not valid_mask.any():
+                continue
+                
+            filtered_preds = {k: v[valid_mask] if k in ["volatility", "return", "cvar"] else v for k, v in preds.items()}
+            filtered_targets = {k: v[valid_mask] for k, v in batch_targets.items()}
+            
+            loss = criterion(filtered_preds, filtered_targets)
             total_loss += loss.item()
 
-            N = preds["return"].size(0)
+            N = filtered_preds["return"].size(0)
             total_samples += N
 
             vol_mse += vol_loss_fn(
-                preds["volatility"], batch_targets["volatility"]
+                filtered_preds["volatility"], filtered_targets["volatility"]
             ).item()
-            ret_mae += ret_loss_fn(preds["return"], batch_targets["return"]).item()
-            cvar_mae += cvar_loss_fn(preds["cvar"], batch_targets["cvar"]).item()
+            ret_mae += ret_loss_fn(filtered_preds["return"], filtered_targets["return"]).item()
+            cvar_mae += cvar_loss_fn(filtered_preds["cvar"], filtered_targets["cvar"]).item()
 
             sign_match = (
-                (torch.sign(preds["return"]) == torch.sign(batch_targets["return"]))
+                (torch.sign(filtered_preds["return"]) == torch.sign(filtered_targets["return"]))
                 .sum()
                 .item()
             )
             correct_dir += sign_match
 
-    return {
-        "total_loss": total_loss / len(loader),
-        "vol_mse": vol_mse / total_samples,
-        "ret_mae": ret_mae / total_samples,
-        "cvar_mae": cvar_mae / total_samples,
-        "directional_accuracy": correct_dir / total_samples,
-    }
+    if total_samples == 0:
+        print("WARNING: evaluate() received zero valid samples. Check target generation for NaNs.")
+        return {
+            "total_loss": total_loss / len(loader) if len(loader) > 0 else float('nan'),
+            "vol_mse": float('nan'),
+            "ret_mae": float('nan'),
+            "cvar_mae": float('nan'),
+            "directional_accuracy": float('nan'),
+        }
+    else:
+        return {
+            "total_loss": total_loss / len(loader),
+            "vol_mse": vol_mse / total_samples,
+            "ret_mae": ret_mae / total_samples,
+            "cvar_mae": cvar_mae / total_samples,
+            "directional_accuracy": correct_dir / total_samples,
+        }

@@ -7,6 +7,27 @@ import numpy as np
 import pandas as pd
 
 
+class EntityLinker:
+    def __init__(self, ticker_to_name: Dict[str, str]):
+        self.ticker_to_name = ticker_to_name
+        self.aliases = {}
+        for ticker, name in ticker_to_name.items():
+            name_lower = name.lower()
+            aliases = [name_lower]
+            for suffix in [" inc.", " corp.", " company", " ltd.", " plc"]:
+                if suffix in name_lower:
+                    aliases.append(name_lower.replace(suffix, ""))
+            self.aliases[ticker] = aliases
+
+    def extract_tickers(self, text: str) -> List[str]:
+        text_lower = text.lower()
+        mentioned = []
+        for ticker, aliases in self.aliases.items():
+            if any(alias in text_lower for alias in aliases):
+                mentioned.append(ticker)
+        return mentioned
+
+
 class SentimentEdgeBuilder:
     def __init__(self, sentiment_df: pd.DataFrame, co_mention_threshold: float = 0.5):
         self.sentiment_df = sentiment_df.copy()
@@ -24,15 +45,14 @@ class SentimentEdgeBuilder:
         edges = []
         decay_factor = np.exp(-np.log(2) / 3)
 
+        linker = EntityLinker(ticker_to_name)
+
         for _, row in gkg_df.iterrows():
             orgs = str(row.get("Organizations", "")).lower()
             names = str(row.get("AllNames", "")).lower()
             text = orgs + " " + names
 
-            mentioned_tickers = []
-            for ticker, name in ticker_to_name.items():
-                if name.lower() in text:
-                    mentioned_tickers.append(ticker)
+            mentioned_tickers = linker.extract_tickers(text)
 
             if len(mentioned_tickers) >= 2:
                 tones = str(row.get("V2Tone", "")).split(",")
@@ -134,7 +154,51 @@ class SentimentEdgeBuilder:
             out_dir = Path("data/processed/edges")
             out_dir.mkdir(parents=True, exist_ok=True)
             final_df.to_parquet(out_dir / "sentiment_edges.parquet", index=False)
+            
+            # Also build sentiment node features
+            self.build_sentiment_node_features(dates, gkg_dfs, ticker_to_name)
             return final_df
 
         self.logger.warning("No sentiment edges built.")
         return pd.DataFrame()
+
+    def build_sentiment_node_features(
+        self,
+        dates: List[str],
+        gkg_dfs: Dict[str, pd.DataFrame],
+        ticker_to_name: Dict[str, str],
+    ) -> None:
+        linker = EntityLinker(ticker_to_name)
+        records = []
+        for d in dates:
+            gkg_df = gkg_dfs.get(d, pd.DataFrame())
+            if gkg_df.empty:
+                continue
+            
+            daily_data = []
+            for _, row in gkg_df.iterrows():
+                text = str(row.get("Organizations", "")).lower() + " " + str(row.get("AllNames", "")).lower()
+                tickers = linker.extract_tickers(text)
+                tones = str(row.get("V2Tone", "")).split(",")
+                try:
+                    tone = float(tones[0])
+                except (ValueError, IndexError):
+                    continue
+                for t in tickers:
+                    daily_data.append({"date": d, "ticker": t, "tone": tone})
+            
+            if daily_data:
+                daily_df = pd.DataFrame(daily_data)
+                grouped = daily_df.groupby(["date", "ticker"]).agg(
+                    NumMentions=("tone", "count"),
+                    ToneDispersion=("tone", "std")
+                ).reset_index()
+                grouped["ToneDispersion"] = grouped["ToneDispersion"].fillna(0.0)
+                records.append(grouped)
+                
+        if records:
+            final_features = pd.concat(records, ignore_index=True)
+            out_dir = Path("data/processed")
+            out_dir.mkdir(parents=True, exist_ok=True)
+            final_features.to_parquet(out_dir / "sentiment_node_features.parquet", index=False)
+            self.logger.info(f"Saved sentiment node features to {out_dir / 'sentiment_node_features.parquet'}")

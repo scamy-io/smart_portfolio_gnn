@@ -27,29 +27,24 @@ class AblationStudy:
         return compute_all_metrics(df)
 
     def run_no_sentiment_edges(self) -> Dict:
-        bt = copy.deepcopy(self.base_backtester)
-        bt.config["ablation"] = "no_sentiment"
-        return self._run_backtester_with_config(bt)
+        # TODO: Ablation requires graph builder modification to actively drop ("stock", "sentiment", "stock") edges
+        raise NotImplementedError("Ablation requires graph builder modification")
 
     def run_no_supply_chain_edges(self) -> Dict:
-        bt = copy.deepcopy(self.base_backtester)
-        bt.config["ablation"] = "no_supply"
-        return self._run_backtester_with_config(bt)
+        # TODO: Ablation requires graph builder modification to actively drop ("stock", "supply_chain", "stock") edges
+        raise NotImplementedError("Ablation requires graph builder modification")
 
     def run_static_graph(self) -> Dict:
-        bt = copy.deepcopy(self.base_backtester)
-        bt.config["ablation"] = "static_graph"
-        return self._run_backtester_with_config(bt)
+        # TODO: Ablation requires graph builder modification to fix edges to the first snapshot
+        raise NotImplementedError("Ablation requires graph builder modification")
 
     def run_no_macro_conditioning(self) -> Dict:
-        bt = copy.deepcopy(self.base_backtester)
-        bt.config["ablation"] = "no_macro"
-        return self._run_backtester_with_config(bt)
+        # TODO: Ablation requires graph builder modification to set macro node features to 0.0
+        raise NotImplementedError("Ablation requires graph builder modification")
 
     def run_weight_only_hhi(self) -> Dict:
-        bt = copy.deepcopy(self.base_backtester)
-        bt.config["ablation"] = "weight_only_hhi"
-        return self._run_backtester_with_config(bt)
+        # TODO: Requires optimizer modification to skip embedding HHI penalty
+        raise NotImplementedError("Ablation requires graph builder modification")
 
     def run_no_transaction_costs(self) -> Dict:
         bt = copy.deepcopy(self.base_backtester)

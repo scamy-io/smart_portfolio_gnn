@@ -9,9 +9,10 @@ from torch_geometric.data import HeteroData
 
 
 class ShockSimulator:
-    def __init__(self, model: nn.Module, device: str):
+    def __init__(self, model: nn.Module, device: str, shock_horizon: int = 21):
         self.model = model.eval()
         self.device = device
+        self.shock_horizon = shock_horizon
 
     def sector_demand_shock(
         self,
@@ -189,11 +190,42 @@ class ShockSimulator:
         else:
             z_base = self.model(graph.to(self.device))["embedding"]
 
+        # Simulate Geometric Brownian Motion to estimate Max Drawdown and Recovery Time
+        horizon = self.shock_horizon
+        dt = 1.0 / 252.0
+        # Generate paths
+        torch.manual_seed(42)
+        random_shocks = torch.randn(horizon)
+        # Assuming port_ret is annualized expected return, port_vol is annualized volatility
+        drift = (port_ret - 0.5 * port_vol ** 2) * dt
+        diffusion = port_vol * np.sqrt(dt) * random_shocks
+        log_returns = drift + diffusion
+        cum_returns = torch.exp(torch.cumsum(log_returns, dim=0))
+        
+        # Max Drawdown
+        running_max = torch.cummax(cum_returns, dim=0)[0]
+        drawdowns = (cum_returns - running_max) / running_max
+        max_drawdown = float(torch.min(drawdowns).item())
+        
+        # Recovery Time
+        # The trough is where max drawdown occurs
+        trough_idx = torch.argmin(drawdowns).item()
+        recovery_time = np.inf
+        # Find first day after trough where cum_returns crosses running_max at trough
+        if trough_idx < horizon - 1:
+            trough_val = running_max[trough_idx]
+            for t in range(trough_idx + 1, horizon):
+                if cum_returns[t] >= trough_val:
+                    recovery_time = float(t - trough_idx)
+                    break
+                    
         return {
             "scenario": scenario,
             "portfolio_return": float(port_ret),
             "portfolio_vol": float(port_vol),
             "portfolio_cvar": float(port_cvar),
+            "max_drawdown": max_drawdown,
+            "recovery_time_days": float(recovery_time),
             "worst_ticker": worst_ticker,
             "embedding_shift": float(torch.mean(torch.norm(z - z_base, dim=1)).item()),
         }

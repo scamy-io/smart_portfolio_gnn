@@ -7,39 +7,58 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+import os
+
 class MacroFetcher:
     """
     Fetches macro data (e.g. from FRED). Falls back to synthetic data
     if API keys or network are not available.
     """
 
-    def __init__(self, api_key: str = None):
-        self.api_key = api_key
+    def __init__(self):
+        self.api_key = os.environ.get("FRED_API_KEY")
+        if not self.api_key:
+            print("WARNING: FRED_API_KEY not found in environment.")
+            print("         Set it in .env file or export FRED_API_KEY=your_key")
+            print("         Get a free key at: https://fred.stlouisfed.org/docs/api/api_key.html")
+        else:
+            print(f"FRED API key loaded: {self.api_key[:4]}...{self.api_key[-4:]}")
+
+    def fetch_series_fred(self, series_id: str, start_date: str, end_date: str) -> pd.Series:
+        import pandas_datareader.data as web
+        import os
+        cache_file = f"data/raw/macro/{series_id}.csv"
+        os.makedirs("data/raw/macro", exist_ok=True)
+        
+        if os.path.exists(cache_file):
+            df = pd.read_csv(cache_file, index_col="DATE", parse_dates=True)
+            if df.index.min() <= pd.to_datetime(start_date) and df.index.max() >= pd.to_datetime(end_date):
+                s = df[series_id]
+                return s.loc[start_date:end_date].ffill()
+        
+        try:
+            df = web.DataReader(series_id, 'fred', start_date, end_date)
+            df.to_csv(cache_file)
+            return df[series_id].ffill()
+        except Exception as e:
+            import os
+            if os.environ.get("SMART_PORTFOLIO_OFFLINE_MODE") == "1":
+                logger.warning(f"OFFLINE MODE: Using zeros for {series_id}")
+                dates = pd.date_range(start=start_date, end=end_date, freq="B")
+                return pd.Series(0.0, index=dates, name=series_id)
+            raise RuntimeError(f"FRED API failed for {series_id}: {e}") from e
 
     def fetch_vix(self, start_date: str, end_date: str) -> pd.Series:
-        """Fetch VIX or generate synthetic VIX data."""
+        """Fetch VIX from FRED or cache."""
         logger.info(f"Fetching VIX from {start_date} to {end_date}")
-
-        # In a real environment with yfinance or FRED API, we'd fetch actual data.
-        # Here we provide a deterministic synthetic fallback for offline execution.
-        try:
-            dates = pd.date_range(start=start_date, end=end_date, freq="B")
-            # Generate synthetic VIX around 20 with some noise
-            np.random.seed(42)
-            vix_values = np.clip(np.random.normal(20, 5, len(dates)), 10, 80)
-            return pd.Series(vix_values, index=dates, name="VIX")
-        except Exception as e:
-            logger.error(f"Failed to generate/fetch VIX data: {e}")
-            return pd.Series(dtype=float)
+        return self.fetch_series_fred("VIXCLS", start_date, end_date)
 
     def fetch_interest_rates(self, start_date: str, end_date: str) -> pd.Series:
-        """Fetch interest rates (e.g. 10Y Treasury) or generate synthetic."""
+        """Fetch 10Y Treasury from FRED or cache."""
         logger.info(f"Fetching Interest Rates from {start_date} to {end_date}")
-        try:
-            dates = pd.date_range(start=start_date, end=end_date, freq="B")
-            np.random.seed(43)
-            rates = np.clip(np.random.normal(4.0, 0.5, len(dates)), 0.0, 10.0)
-            return pd.Series(rates, index=dates, name="InterestRate")
-        except Exception as e:
-            logger.error(f"Failed to generate/fetch Interest Rate data: {e}")
-            return pd.Series(dtype=float)
+        return self.fetch_series_fred("DGS10", start_date, end_date)
+        
+    def fetch_corporate_spread(self, start_date: str, end_date: str) -> pd.Series:
+        """Fetch BAA Corporate Spread from FRED or cache."""
+        logger.info(f"Fetching BAA Spread from {start_date} to {end_date}")
+        return self.fetch_series_fred("BAA10Y", start_date, end_date)

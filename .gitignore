@@ -18,8 +18,12 @@ logs/
 reports/
 *.log
 
-# C environment
+# Environment variables
 .env
+
+# Data cache
+data/raw/macro/*.csv
+data/raw/*.csv
 .venv
 env/
 venv/

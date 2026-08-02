@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 import argparse
 import logging
 import sys
@@ -74,9 +76,10 @@ def main():
         ),
     }
 
+    nf_path = Path("data/processed/node_features_dry_run.parquet") if "tickers" in config else Path("data/processed/node_features.parquet")
     dataset = TemporalGraphDataset(
         graph_snapshot_dir=Path("data/processed/graph_snapshots"),
-        node_features_path=Path("data/processed/node_features.parquet"),
+        node_features_path=nf_path,
         edge_paths=edge_paths,
     )
 
@@ -84,19 +87,27 @@ def main():
         logger.error("No graph snapshots found. Please run build_graphs.py first.")
         return
 
-    train_loader, val_loader, test_loader = dataset.get_loaders(batch_size=32)
+    # DRY RUN CONFIG
+    epochs = config.get("training", {}).get("epochs", args.epochs)
+    lr = config.get("training", {}).get("learning_rate", args.lr)
+    batch_size = config.get("training", {}).get("batch_size", 32)
+    weight_decay = config.get("training", {}).get("weight_decay", 1e-5)
+    
+    hidden_channels = config.get("model", {}).get("hidden_channels", 64)
+
+    train_loader, val_loader, test_loader = dataset.get_loaders(batch_size=batch_size)
 
     sample_data = dataset[0]
     in_channels = sample_data["stock"].x.shape[1]
     metadata = sample_data.metadata()
 
-    model = FullModel(metadata, in_channels).to(device)
+    model = FullModel(metadata, in_channels, hidden_channels=hidden_channels).to(device)
     logger.info(
         f"Initialized HTGAT with parameter count: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}"
     )
 
     criterion = PortfolioLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
 
     start_epoch = 0
@@ -120,7 +131,7 @@ def main():
     logs_dir.mkdir(exist_ok=True)
 
     logger.info("Starting training...")
-    for epoch in range(start_epoch, args.epochs):
+    for epoch in range(start_epoch, epochs):
         train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
         val_metrics = evaluate(model, val_loader, criterion, device)
         val_loss = val_metrics["total_loss"]
