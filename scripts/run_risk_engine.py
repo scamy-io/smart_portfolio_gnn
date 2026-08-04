@@ -130,8 +130,16 @@ def main():
         z_norm = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
         cov_gnn = z_norm @ z_norm.T
 
-        opt = CostAwareOptimizer(pred_rets, cov_gnn, weights)
-        opt_w = opt.optimize()
+        cov_hist = np.eye(len(tickers)) # Dummy historical cov for script
+        opt = CostAwareOptimizer(pred_rets, cov_hist, weights)
+        
+        risk_config = config.get("risk", {})
+        opt_w = opt.optimize(
+            gamma=risk_config.get("gamma", 1.0),
+            lambda_conc=risk_config.get("lambda_conc", 0.1),
+            Sigma_gnn=cov_gnn,
+            beta=risk_config.get("beta", 0.5)
+        )
         df_trades = opt.generate_trades(opt_w)
         trades = df_trades.to_dict(orient="records")
 

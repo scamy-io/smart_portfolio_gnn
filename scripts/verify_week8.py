@@ -48,7 +48,7 @@ def main():
 
     # ── Check README quality ──
     print("\n--- Checking README ---")
-    readme = Path("README.md").read_text()
+    readme = Path("README.md").read_text(encoding="utf-8")
     assert "# Smart Portfolio" in readme or "Portfolio Rebalancing" in readme
     assert "Quick Start" in readme or "quick start" in readme
     assert "pip install" in readme or "make install" in readme
@@ -58,7 +58,7 @@ def main():
     print("\n--- Checking Full Pipeline ---")
     pipeline = Path("scripts/run_full_pipeline.py")
     assert pipeline.exists()
-    text = pipeline.read_text()
+    text = pipeline.read_text(encoding="utf-8")
     assert "download" in text
     assert "train" in text
     assert "backtest" in text

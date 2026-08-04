@@ -61,8 +61,49 @@ class WalkForwardBacktester:
                 next_date = min(future_dates)
                 next_prices = self.ohlcv[(self.ohlcv["date"] == next_date) & (self.ohlcv["ticker"].isin(tickers))].set_index("ticker")["close"]
 
+        if curr_prices.empty or next_prices.empty:
+            if len(tickers) > 0:
+                raise ValueError(f"Realized price lookup failed for {current_date}. Found 0 valid prices for the given tickers. Possible ticker identity mismatch.")
+            return pd.Series(0.0, index=tickers)
+
         ret = np.log(next_prices / curr_prices)
         return ret.reindex(tickers).fillna(0.0)
+
+    def _compute_cov_hist(self, current_date: str, tickers: list) -> np.ndarray:
+        if self.ohlcv is None or "close" not in self.ohlcv.columns:
+            return np.eye(len(tickers))
+        
+        # Reconcile window length with 63-day correlation edges
+        past_data = self.ohlcv[self.ohlcv["date"] <= current_date]
+        if past_data.empty:
+            return np.eye(len(tickers))
+            
+        unique_dates = sorted(past_data["date"].unique())
+        window_dates = unique_dates[-64:]
+        
+        window_data = past_data[past_data["date"].isin(window_dates)]
+        pivot = window_data.pivot(index="date", columns="ticker", values="close")
+        
+        # Missing data policy: forward-fill prices first, then back-fill
+        pivot = pivot.ffill().bfill()
+        
+        # Compute log returns, not prices
+        log_rets = np.log(pivot / pivot.shift(1)).dropna(how="all")
+        
+        # Explicitly fill missing ticker columns with 0.0 log return
+        log_rets = log_rets.reindex(columns=tickers).fillna(0.0)
+        
+        if len(log_rets) < 2:
+            return np.eye(len(tickers))
+            
+        cov_hist = np.cov(log_rets.values, rowvar=False) * 252.0
+        
+        # Apply PSD repair directly
+        eigvals, eigvecs = np.linalg.eigh(cov_hist)
+        eigvals = np.maximum(eigvals, 1e-8)
+        cov_hist = eigvecs @ np.diag(eigvals) @ eigvecs.T
+        
+        return cov_hist
 
     def run(self, start_date: str, end_date: str) -> pd.DataFrame:
         history = []
@@ -80,7 +121,10 @@ class WalkForwardBacktester:
 
         for i, date in enumerate(dates):
             graph = self.dataset.get_snapshot_by_date(date)
-            tickers = [f"STOCK_{j}" for j in range(graph["stock"].x.shape[0])]
+            if hasattr(graph, "tickers"):
+                tickers = graph.tickers
+            else:
+                raise ValueError("Graph snapshot does not contain 'tickers' attribute. Ticker identities must be preserved.")
             
             # G4: Enforce Universe Selection (Simulated Top 100)
             tickers = tickers[:100]
@@ -150,13 +194,22 @@ class WalkForwardBacktester:
                 z_norm = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
                 cov_gnn = z_norm @ z_norm.T
 
+                cov_hist = self._compute_cov_hist(date, tickers)
+
                 opt = CostAwareOptimizer(
                     expected_returns=pred_ret,
-                    cov_matrix=cov_gnn,
+                    cov_matrix=cov_hist,
                     current_weights=current_weights,
                     transaction_cost_rate=self.transaction_cost_rate,
                 )
-                new_weights = opt.optimize()
+                
+                risk_config = self.config.get("risk", {})
+                new_weights = opt.optimize(
+                    gamma=risk_config.get("gamma", 1.0),
+                    lambda_conc=risk_config.get("lambda_conc", 0.1),
+                    Sigma_gnn=cov_gnn,
+                    beta=risk_config.get("beta", 0.5)
+                )
 
                 delta = new_weights - current_weights
                 turnover = float(delta.abs().sum())

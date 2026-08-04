@@ -141,7 +141,7 @@ class ShockSimulator:
         elif scenario == "supply_chain_failure":
             g = self.supply_chain_failure(graph, kwargs.get("target_idx", 0))
         elif scenario == "sentiment_contagion":
-            g = self.sentiment_contagion(graph, kwargs.get("target_indices", []))
+            g = self.sentiment_contagion(graph, kwargs.get("target_indices", []), kwargs.get("noise_intensity", 0.2))
         elif scenario == "liquidity_freeze":
             g = self.liquidity_freeze(graph)
         elif scenario == "macro_regime_shift":
@@ -194,7 +194,6 @@ class ShockSimulator:
         horizon = self.shock_horizon
         dt = 1.0 / 252.0
         # Generate paths
-        torch.manual_seed(42)
         random_shocks = torch.randn(horizon)
         # Assuming port_ret is annualized expected return, port_vol is annualized volatility
         drift = (port_ret - 0.5 * port_vol ** 2) * dt
@@ -236,12 +235,28 @@ class ShockSimulator:
         n_scenarios: int,
         tickers: List[str],
         weights: pd.Series,
+        seed: int = 42,
     ) -> pd.DataFrame:
-        scenarios = ["liquidity_freeze", "macro_regime_shift", "sector_demand_shock"]
+        if seed is not None:
+            torch.manual_seed(seed)
+            np.random.seed(seed)
+        scenarios = ["liquidity_freeze", "macro_regime_shift", "sector_demand_shock", "sentiment_contagion", "supply_chain_failure"]
         results = []
         for _ in range(n_scenarios):
             s = np.random.choice(scenarios)
-            res = self.run_scenario(graph, s, tickers, weights, target_indices=[0, 1])
+            target_indices = np.random.choice(range(len(tickers)), size=max(1, int(len(tickers) * 0.1)), replace=False).tolist()
+            target_idx = np.random.choice(range(len(tickers)))
+            noise_intensity = np.random.uniform(0.1, 0.5)
+            
+            res = self.run_scenario(
+                graph, 
+                s, 
+                tickers, 
+                weights, 
+                target_indices=target_indices,
+                target_idx=int(target_idx),
+                noise_intensity=noise_intensity
+            )
             results.append(res)
 
         df = pd.DataFrame(results)

@@ -62,6 +62,7 @@ class StockGraph:
                 data["stock", default_edge_type, "stock"].edge_attr = edge_attr
 
         data.date = self.date
+        data.tickers = self.tickers
         return data
 
     def get_metadata(self) -> Tuple[List[str], List[Tuple]]:
@@ -76,9 +77,8 @@ class StockGraph:
     def validate(self) -> bool:
         is_valid = True
 
-        if self.node_features.isna().any().any():
-            self.logger.error(f"[{self.date}] NaN found in node features.")
-            is_valid = False
+        # Note: NaN check removed because TemporalGraphDataset handles NaN masking at tensor level
+        pass
 
         for edge_type, edge_df in self.edge_dataframes.items():
             if edge_df.empty:

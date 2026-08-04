@@ -98,7 +98,7 @@ def main():
     train_loader, val_loader, test_loader = dataset.get_loaders(batch_size=batch_size)
 
     sample_data = dataset[0]
-    in_channels = sample_data["stock"].x.shape[1]
+    in_channels = sample_data["stock"].x.shape[-1]
     metadata = sample_data.metadata()
 
     model = FullModel(metadata, in_channels, hidden_channels=hidden_channels).to(device)

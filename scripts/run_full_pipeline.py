@@ -26,6 +26,9 @@ def main():
     parser.add_argument(
         "--skip-dashboard", action="store_true", help="Skip launching dashboard"
     )
+    parser.add_argument(
+        "--skip-gdelt", action="store_true", help="Skip GDELT processing"
+    )
     args = parser.parse_args()
 
     # 1. Check prerequisites
@@ -34,7 +37,10 @@ def main():
 
     # 2. Run Week 1: download_data
     if not args.skip_download:
-        run_step("Week 1: Data Ingestion", [sys.executable, "scripts/download_data.py"])
+        dl_cmd = [sys.executable, "scripts/download_data.py"]
+        if args.skip_gdelt:
+            dl_cmd.append("--skip-gdelt")
+        run_step("Week 1: Data Ingestion", dl_cmd)
     else:
         print("\n⏭ Skipping Data Ingestion (--skip-download)")
 

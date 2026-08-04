@@ -111,11 +111,28 @@ class FeatureEngineer:
         df = pd.merge(self.prices_df, fundamentals_df, on="ticker", how="left")
 
         fund_cols = [c for c in fundamentals_df.columns if c != "ticker"]
+        
+        # Sort by date and ticker to ensure expanding operations are point-in-time
+        if "date" in df.columns:
+            df = df.sort_values(by=["ticker", "date"]).reset_index(drop=True)
+            
+        zero_legitimate_cols = {"dividendYield"}
+        
         for col in fund_cols:
             if col in df.columns:
+                # 1. Point-in-time expanding median for the ticker
                 df[col] = df.groupby("ticker")[col].transform(
-                    lambda x: x.fillna(x.median())
+                    lambda x: x.fillna(x.expanding().median())
                 )
+                # 2. Cold-start fallback: cross-sectional median for that specific date
+                if "date" in df.columns:
+                    df[col] = df.groupby("date")[col].transform(
+                        lambda x: x.fillna(x.median())
+                    )
+                # 3. Terminal fallback: 0.0 for legitimate columns, NaN for others
+                if col in zero_legitimate_cols:
+                    df[col] = df[col].fillna(0.0)
+                # For non zero-legitimate cols, it remains NaN. Downstream processes (like model masking) will handle it.
 
         self.prices_df = df
         return self.prices_df

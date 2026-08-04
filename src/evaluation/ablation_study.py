@@ -27,24 +27,31 @@ class AblationStudy:
         return compute_all_metrics(df)
 
     def run_no_sentiment_edges(self) -> Dict:
-        # TODO: Ablation requires graph builder modification to actively drop ("stock", "sentiment", "stock") edges
-        raise NotImplementedError("Ablation requires graph builder modification")
+        bt = copy.deepcopy(self.base_backtester)
+        bt.dataset.ablation_config = {"no_sentiment": True}
+        return self._run_backtester_with_config(bt)
 
     def run_no_supply_chain_edges(self) -> Dict:
-        # TODO: Ablation requires graph builder modification to actively drop ("stock", "supply_chain", "stock") edges
-        raise NotImplementedError("Ablation requires graph builder modification")
+        bt = copy.deepcopy(self.base_backtester)
+        bt.dataset.ablation_config = {"no_supply": True}
+        return self._run_backtester_with_config(bt)
 
     def run_static_graph(self) -> Dict:
-        # TODO: Ablation requires graph builder modification to fix edges to the first snapshot
-        raise NotImplementedError("Ablation requires graph builder modification")
+        bt = copy.deepcopy(self.base_backtester)
+        bt.dataset.ablation_config = {"static_graph": True}
+        return self._run_backtester_with_config(bt)
 
     def run_no_macro_conditioning(self) -> Dict:
-        # TODO: Ablation requires graph builder modification to set macro node features to 0.0
-        raise NotImplementedError("Ablation requires graph builder modification")
+        bt = copy.deepcopy(self.base_backtester)
+        bt.dataset.ablation_config = {"no_macro": True}
+        return self._run_backtester_with_config(bt)
 
-    def run_weight_only_hhi(self) -> Dict:
-        # TODO: Requires optimizer modification to skip embedding HHI penalty
-        raise NotImplementedError("Ablation requires graph builder modification")
+    def run_no_embedding_concentration_penalty(self) -> Dict:
+        bt = copy.deepcopy(self.base_backtester)
+        if "risk" not in bt.config:
+            bt.config["risk"] = {}
+        bt.config["risk"]["lambda_conc"] = 0.0
+        return self._run_backtester_with_config(bt)
 
     def run_no_transaction_costs(self) -> Dict:
         bt = copy.deepcopy(self.base_backtester)
@@ -70,7 +77,7 @@ class AblationStudy:
         results["no_macro"] = self.run_no_macro_conditioning()
 
         print("Running ablation: weight only HHI...")
-        results["weight_only_hhi"] = self.run_weight_only_hhi()
+        results["no_embedding_concentration_penalty"] = self.run_no_embedding_concentration_penalty()
 
         print("Running ablation: no transaction costs...")
         results["no_costs"] = self.run_no_transaction_costs()

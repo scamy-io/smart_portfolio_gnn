@@ -14,6 +14,7 @@ class CorrelationEdgeBuilder:
         window_medium: int = 63,
         threshold: float = 0.3,
         top_k: int = 15,
+        vix_series: pd.Series = None,
     ):
         self.prices_df = prices_df.copy()
         if "date" in self.prices_df.columns:
@@ -24,6 +25,7 @@ class CorrelationEdgeBuilder:
         self.window_medium = window_medium
         self.threshold = threshold
         self.top_k = top_k
+        self.vix_series = vix_series
         self.logger = logging.getLogger(__name__)
 
     def build_edges_for_date(self, date: str) -> pd.DataFrame:
@@ -69,13 +71,26 @@ class CorrelationEdgeBuilder:
                     by=["abs_weight", "target"], ascending=[False, True]
                 ).head(self.top_k)
 
+                # VIX Regime Conditioning
+                vix = 20.0
+                if self.vix_series is not None:
+                    # Parse date to match index format if needed, or just look up
+                    try:
+                        vix = self.vix_series.loc[date]
+                    except KeyError:
+                        pass
+                
+                scale_factor = 1.0
+                if vix > 30:
+                    scale_factor = np.exp(-0.1 * (vix - 20))
+
                 for _, row in valid_corrs.iterrows():
                     edges.append(
                         {
                             "date": date,
                             "source": src,
                             "target": row["target"],
-                            "weight": row["weight"],
+                            "weight": row["weight"] * scale_factor,
                             "edge_type": etype,
                             "window": w,
                         }

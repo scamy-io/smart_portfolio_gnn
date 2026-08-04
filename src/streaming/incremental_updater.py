@@ -136,8 +136,9 @@ class IncrementalGraphUpdater:
     def update_sentiment_edges(
         self, news_batch: List[Dict], ticker_to_idx: Dict[str, int]
     ) -> HeteroData:
-        old_ei = self.graph["stock", "sentiment_co_mention", "stock"].edge_index
-        if old_ei is None:
+        if ("stock", "sentiment_co_mention", "stock") in self.graph.edge_types and hasattr(self.graph["stock", "sentiment_co_mention", "stock"], "edge_index"):
+            old_ei = self.graph["stock", "sentiment_co_mention", "stock"].edge_index
+        else:
             old_ei = torch.empty((2, 0), dtype=torch.long)
             
         current_time = time.time()

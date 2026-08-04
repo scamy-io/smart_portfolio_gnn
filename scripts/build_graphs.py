@@ -81,8 +81,21 @@ def main():
             columns=["ticker", "sector", "industry_group", "industry"]
         )
 
+    try:
+        nf_df = pd.read_parquet("data/processed/node_features.parquet").reset_index()
+        if "tickers" in config:
+            nf_df = nf_df[nf_df["ticker"].isin(config["tickers"])]
+        nf_df.set_index(["date", "ticker"]).to_parquet("data/processed/node_features_dry_run.parquet")
+        nf_path = Path("data/processed/node_features_dry_run.parquet")
+    except Exception:
+        nf_df = pd.DataFrame()
+        nf_path = Path("data/processed/node_features.parquet")
+
     logger.info("Building correlation edges...")
-    corr_builder = CorrelationEdgeBuilder(prices_df)
+    vix_series = None
+    if not nf_df.empty and "vix_level" in nf_df.columns:
+        vix_series = nf_df.groupby("date")["vix_level"].first()
+    corr_builder = CorrelationEdgeBuilder(prices_df, vix_series=vix_series)
     corr_builder.build_all_edges(dates)
 
     logger.info("Building supply chain edges...")
@@ -110,16 +123,6 @@ def main():
             logger.error(f"Failed to build sentiment edges: {e}")
 
     logger.info("Building TemporalGraphDataset snapshots...")
-    
-    # Also filter node_features.parquet for the dataset
-    try:
-        nf_df = pd.read_parquet("data/processed/node_features.parquet").reset_index()
-        if "tickers" in config:
-            nf_df = nf_df[nf_df["ticker"].isin(config["tickers"])]
-        nf_df.set_index(["date", "ticker"]).to_parquet("data/processed/node_features_dry_run.parquet")
-        nf_path = Path("data/processed/node_features_dry_run.parquet")
-    except Exception:
-        nf_path = Path("data/processed/node_features.parquet")
 
     edge_paths = {
         "correlates_with": Path("data/processed/edges/correlation_edges.parquet"),

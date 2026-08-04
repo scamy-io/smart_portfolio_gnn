@@ -20,7 +20,9 @@ class TemporalGraphDataset(Dataset):
         edge_paths: Dict[str, Path],
         window_size: int = 25,
         prediction_horizon: int = 5,
+        ablation_config: Dict = None,
     ):
+        self.ablation_config = ablation_config or {}
         self.graph_snapshot_dir = graph_snapshot_dir
         self.node_features_path = node_features_path
         self.edge_paths = edge_paths
@@ -35,8 +37,12 @@ class TemporalGraphDataset(Dataset):
             self.nf_df = pd.read_parquet(self.node_features_path)
             self.nf_df = self.nf_df.reset_index()
             self.nf_df["date"] = pd.to_datetime(self.nf_df["date"]).dt.tz_localize(None).dt.strftime("%Y-%m-%d")
+            self.feature_cols = [c for c in self.nf_df.columns if c not in ["date", "ticker", "index"]]
+            self.nf_indexed = self.nf_df.set_index(["date", "ticker"]).sort_index()
         except Exception:
             self.nf_df = None
+            self.nf_indexed = None
+            self.feature_cols = []
 
         try:
             self.ohlcv = pd.read_parquet("data/raw/prices/ohlcv.parquet")
@@ -112,16 +118,23 @@ class TemporalGraphDataset(Dataset):
             raise KeyError(f"No snapshot found for date {date}")
 
     def __getitem__(self, idx: int) -> HeteroData:
+        if self.ablation_config.get("static_graph", False):
+            idx = 0
+            
         pyg_data = torch.load(self.snapshots[idx], weights_only=False)
+        
+        # Apply edge ablations dynamically
+        if self.ablation_config.get("no_sentiment", False):
+            if ("stock", "sentiment_co_mention", "stock") in pyg_data.edge_types:
+                del pyg_data[("stock", "sentiment_co_mention", "stock")]
+                
+        if self.ablation_config.get("no_supply", False):
+            if ("stock", "supplies", "stock") in pyg_data.edge_types:
+                del pyg_data[("stock", "supplies", "stock")]
 
         num_nodes = pyg_data["stock"].x.shape[0]
         date_str = pyg_data.date if hasattr(pyg_data, 'date') else self.snapshot_dates[idx]
         date_str = pd.to_datetime(date_str).strftime('%Y-%m-%d') if hasattr(date_str, 'strftime') else str(date_str)
-
-        if idx < 3:
-            print(f"[DEBUG] idx={idx}, date={date_str}, tickers={len(self.nf_df[self.nf_df['date'] == date_str]['ticker'].unique()) if self.nf_df is not None else 'N/A'}")
-            print(f"[DEBUG] close_pivot shape={self.close_pivot.shape if getattr(self, 'close_pivot', None) is not None else None}")
-            print(f"[DEBUG] date in all_dates={date_str in self.all_dates if getattr(self, 'all_dates', None) else False}")
 
         r_out = torch.full((num_nodes,), float('nan'), dtype=torch.float32)
         v_out = torch.full((num_nodes,), float('nan'), dtype=torch.float32)
@@ -130,6 +143,39 @@ class TemporalGraphDataset(Dataset):
         if self.nf_df is not None and self.close_pivot is not None and date_str in self.all_dates:
             tickers = sorted(self.nf_df[self.nf_df["date"] == date_str]["ticker"].unique().tolist())
             t_idx = self.all_dates.index(date_str)
+            
+            # 1. Build 3D historical feature tensor
+            window_start_idx = max(0, t_idx - self.window_size + 1)
+            window_dates = self.all_dates[window_start_idx : t_idx + 1]
+            x_3d = np.zeros((len(window_dates), len(tickers), len(self.feature_cols)), dtype=np.float32)
+            
+            for d_i, w_date in enumerate(window_dates):
+                try:
+                    day_data = self.nf_indexed.loc[w_date]
+                    valid_tickers = day_data.index.intersection(tickers)
+                    if not valid_tickers.empty:
+                        ticker_indices = np.searchsorted(tickers, valid_tickers)
+                        x_3d[d_i, ticker_indices, :] = day_data.loc[valid_tickers, self.feature_cols].values
+                except KeyError:
+                    pass
+            
+            pad_len = self.window_size - len(window_dates)
+            if pad_len > 0:
+                pad_tensor = np.zeros((pad_len, len(tickers), len(self.feature_cols)), dtype=np.float32)
+                x_3d = np.concatenate([pad_tensor, x_3d], axis=0)
+            
+            x_3d = np.transpose(x_3d, (1, 0, 2))
+            
+            # Apply node feature ablations dynamically
+            if self.ablation_config.get("no_macro", False):
+                # Identify macro columns (e.g. vix_level, dff, cpiaucsl)
+                macro_cols = [i for i, c in enumerate(self.feature_cols) if c in ["vix_level", "dff", "cpiaucsl", "unrate"]]
+                if macro_cols:
+                    x_3d[:, :, macro_cols] = 0.0
+
+            pyg_data["stock"].x = torch.nan_to_num(torch.tensor(x_3d, dtype=torch.float32), nan=0.0)
+            
+            # 2. Build Targets
             
             if t_idx + 1 < len(self.all_dates):  # Need at least t+1 for return
                 next_date = self.all_dates[t_idx + 1]
@@ -171,6 +217,8 @@ class TemporalGraphDataset(Dataset):
         pyg_data.volatility = v
         pyg_data.return_ = r
         pyg_data.cvar = c
+        if 'tickers' in locals():
+            pyg_data.tickers = tickers
         return pyg_data
 
     def get_loaders(self, batch_size=32, train_ratio=0.7, val_ratio=0.15):

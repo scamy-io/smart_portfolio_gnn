@@ -1,22 +1,36 @@
 import torch
 import torch.nn as nn
 
-
 class EvolveGCNLayer(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, num_layers: int = 1):
+    """
+    True EvolveGCN implementation.
+    Evolves a weight matrix dynamically using a GRU based on graph-level summaries.
+    """
+    def __init__(self, node_emb_dim: int, weight_dim: int):
         super().__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.hidden = 16
+        self.node_emb_dim = node_emb_dim
+        self.weight_dim = weight_dim
+        
+        # Input: Graph-level node summary (node_emb_dim)
+        # Hidden State: Flattened weight matrix (weight_dim)
+        self.gru = nn.GRUCell(input_size=node_emb_dim, hidden_size=weight_dim)
 
-        self.adapter = nn.Sequential(
-            nn.Linear(1, self.hidden), nn.ReLU(), nn.Linear(self.hidden, out_channels)
-        )
-        # TODO: Replace with full EvolveGCN in Phase 2
-
-    def forward(
-        self, node_features: torch.Tensor, output_features: torch.Tensor
-    ) -> torch.Tensor:
-        vix_input = node_features[:, 0].mean().view(1, 1)
-        scale = self.adapter(vix_input)
-        return output_features * scale
+    def forward(self, node_features: torch.Tensor, weight_matrix: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            node_features: [num_nodes, node_emb_dim]
+            weight_matrix: [in_channels, out_channels]
+        Returns:
+            evolved_weight: [in_channels, out_channels]
+        """
+        # Graph-level summary via mean pooling
+        graph_summary = node_features.mean(dim=0, keepdim=True)  # [1, node_emb_dim]
+        
+        original_shape = weight_matrix.shape
+        flat_weight = weight_matrix.view(1, -1)  # [1, in_channels * out_channels]
+        
+        if self.gru.hidden_size != flat_weight.shape[1]:
+            raise ValueError(f"GRU hidden_size ({self.gru.hidden_size}) must match flattened weight size ({flat_weight.shape[1]})")
+            
+        evolved_flat_weight = self.gru(graph_summary, flat_weight)
+        return evolved_flat_weight.view(original_shape)

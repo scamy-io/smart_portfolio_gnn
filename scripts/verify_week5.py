@@ -122,11 +122,11 @@ def main():
         def __getitem__(self, idx):
             g = torch.load(self.files[idx], weights_only=False)
             n = g["stock"].x.shape[0]
-            return g, {
-                "volatility": torch.rand(n) * 0.3,
-                "return": torch.randn(n) * 0.01,
-                "cvar": torch.rand(n) * -0.03,
-            }
+            g.volatility = torch.rand(n) * 0.3
+            g.return_ = torch.randn(n) * 0.01
+            g.cvar = torch.rand(n) * -0.03
+            g.tickers = [f"TICKER_{i}" for i in range(n)]
+            return g
 
         def get_snapshot_by_date(self, date):
             idx = self.snapshot_dates.index(date)
@@ -147,6 +147,17 @@ def main():
         transaction_cost_bps=10.0,
         initial_capital=1_000_000.0,
     )
+    
+    # Mock OHLCV
+    mock_records = []
+    for d in dates:
+        for i in range(20):
+            mock_records.append({
+                "date": d,
+                "ticker": f"TICKER_{i}",
+                "close": np.random.uniform(50, 150)
+            })
+    bt.ohlcv = pd.DataFrame(mock_records)
 
     # Run mini backtest
     portfolio_df = bt.run(dates[0], dates[-1])

@@ -16,7 +16,11 @@ class TemporalNodeEncoder(nn.Module):
         self.hidden_channels = hidden_channels
         self.window_size = window_size
 
-        self.input_proj = nn.Linear(in_channels, hidden_channels)
+        self.input_proj = nn.Sequential(
+            nn.Linear(in_channels, hidden_channels),
+            nn.LayerNorm(hidden_channels),
+            nn.ReLU()
+        )
         self.pos_embedding = nn.Parameter(torch.randn(1, window_size, hidden_channels))
 
         encoder_layer = nn.TransformerEncoderLayer(

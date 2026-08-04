@@ -22,21 +22,25 @@ def main():
 
     # ── Load one snapshot ──
 
-    snapshot_dir = Path("data/processed/graph_snapshots")
-
-    files = sorted(snapshot_dir.glob("*.pt"))
-
-    assert len(files) > 0, "No snapshots found!"
-
-    g = torch.load(files[0], weights_only=False)
-
+    from src.graph_builder.temporal_graph import TemporalGraphDataset
+    dataset = TemporalGraphDataset(
+        graph_snapshot_dir=Path("data/processed/graph_snapshots"),
+        node_features_path=Path("data/processed/node_features.parquet"),
+        edge_paths={
+            "correlates_with": Path("data/processed/edges/correlation_edges.parquet"),
+            "sentiment_co_mention": Path("data/processed/edges/sentiment_edges.parquet"),
+            "supplies": Path("data/processed/edges/supply_chain_edges_processed.parquet"),
+            "same_sector_as": Path("data/processed/edges/sector_edges.parquet"),
+            "fundamentally_similar_to": Path("data/processed/edges/fundamental_edges.parquet"),
+        }
+    )
+    assert len(dataset) > 0, "No snapshots found!"
+    g = dataset[0]
     metadata = g.metadata()
-
-    num_features = g["stock"].x.shape[1]
-
+    num_features = g["stock"].x.shape[-1]
     num_nodes = g["stock"].x.shape[0]
 
-    print(f"Loaded graph: {files[0].stem}")
+    print(f"Loaded graph: {g.date if hasattr(g, 'date') else 'unknown'}")
 
     print(f"  Nodes: {num_nodes}, Features: {num_features}")
 
@@ -47,16 +51,15 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = HTGAT(
-        metadata=metadata,
-        in_channels=num_features,
-        hidden_channels=64,
-        out_channels=64,
-        num_layers=3,
+        node_features=num_features,
+        hidden_dim=64,
+        out_dim=64,
         num_heads=4,
         dropout=0.2,
+        edge_types=metadata[1],
     ).to(device)
 
-    heads = MultiTaskPredictionHeads(in_channels=64, hidden_dim=32).to(device)
+    heads = MultiTaskPredictionHeads(hidden_dim=64).to(device)
 
     criterion = PortfolioLoss(lambda_vol=1.0, lambda_ret=1.0, lambda_cvar=0.5).to(
         device
