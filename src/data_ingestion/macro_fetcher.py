@@ -18,11 +18,10 @@ class MacroFetcher:
     def __init__(self):
         self.api_key = os.environ.get("FRED_API_KEY")
         if not self.api_key:
-            print("WARNING: FRED_API_KEY not found in environment.")
-            print("         Set it in .env file or export FRED_API_KEY=your_key")
-            print("         Get a free key at: https://fred.stlouisfed.org/docs/api/api_key.html")
+            logger.warning("FRED_API_KEY not found. Set it in .env or export FRED_API_KEY=your_key")
+            logger.warning("Get a free key at: https://fred.stlouisfed.org/docs/api/api_key.html")
         else:
-            print(f"FRED API key loaded: {self.api_key[:4]}...{self.api_key[-4:]}")
+            logger.info("FRED API key loaded successfully.")
 
     def fetch_series_fred(self, series_id: str, start_date: str, end_date: str) -> pd.Series:
         import pandas_datareader.data as web

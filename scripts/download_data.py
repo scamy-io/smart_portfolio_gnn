@@ -5,6 +5,7 @@ load_dotenv()
 
 import argparse
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -16,8 +17,59 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from src.data_ingestion.feature_engineering import FeatureEngineer
 from src.data_ingestion.gdelt_processor import GDELTProcessor
+from src.data_ingestion.macro_fetcher import MacroFetcher
 from src.data_ingestion.sec_parser import SECParser
 from src.data_ingestion.yfinance_downloader import YFinanceDownloader
+
+# Seed map for tickers whose symbols are too short or ambiguous for GDELT
+# entity matching (e.g. "V" would match any word with the letter V).
+# Tickers not in this map are auto-populated from yfinance shortName.
+_SEED_COMPANY_NAMES = {
+    "V": "Visa Inc",
+    "T": "AT&T",
+    "C": "Citigroup",
+    "F": "Ford Motor",
+    "K": "Kellanova",
+    "D": "Dominion Energy",
+    "A": "Agilent Technologies",
+    "O": "Realty Income",
+    "J": "Jacobs Solutions",
+    "L": "Loews Corporation",
+}
+
+
+def build_company_name_map(tickers, fundamentals_df=None):
+    """Build a ticker-to-company-name map for GDELT entity matching.
+
+    Uses yfinance shortName from fundamentals where available,
+    falls back to the seed map for ambiguous short tickers.
+    """
+    import yfinance as yf
+
+    name_map = {}
+    for t in tickers:
+        # Seed map takes priority for known-ambiguous tickers
+        if t in _SEED_COMPANY_NAMES:
+            name_map[t] = _SEED_COMPANY_NAMES[t]
+            continue
+
+        # Try to get from yfinance (cached, fast)
+        try:
+            info = yf.Ticker(t).info
+            short_name = info.get("shortName", "")
+            if short_name and len(short_name) > 2:
+                # Strip common suffixes for cleaner matching
+                for suffix in [" Inc.", " Inc", " Corp.", " Corp", " Co.", " Ltd.", " Ltd"]:
+                    short_name = short_name.replace(suffix, "")
+                name_map[t] = short_name.strip()
+                continue
+        except Exception:
+            pass
+
+        # Final fallback: use the ticker itself
+        name_map[t] = t
+
+    return name_map
 
 
 def setup_logging(level_str: str, file_path: str):
@@ -96,13 +148,26 @@ def main():
     fundamentals_df = yf_dl.download_fundamentals()
     logger.info(f"YFinance download took {time.time() - t0:.2f} seconds")
 
-    # 4. Run GDELTProcessor
+    # 4. Run MacroFetcher (VIX, interest rates, spreads)
+    t0 = time.time()
+    try:
+        macro = MacroFetcher()
+        macro.fetch_vix(config["date_range"]["start"], config["date_range"]["end"])
+        macro.fetch_interest_rates(config["date_range"]["start"], config["date_range"]["end"])
+        macro.fetch_corporate_spread(config["date_range"]["start"], config["date_range"]["end"])
+        logger.info(f"Macro data fetch took {time.time() - t0:.2f} seconds")
+    except Exception as e:
+        logger.warning(f"MacroFetcher failed: {e}. Setting SMART_PORTFOLIO_OFFLINE_MODE=1 as fallback.")
+        os.environ["SMART_PORTFOLIO_OFFLINE_MODE"] = "1"
+
+    # 5. Run GDELTProcessor
     if not args.skip_gdelt:
         t0 = time.time()
-        # Create a dummy company name map for now
-        company_map = {t: t for t in tickers}
+        # Build company name map dynamically from yfinance data
+        company_map = build_company_name_map(tickers)
         gdelt = GDELTProcessor(
-            tickers=tickers, company_name_map=company_map, output_dir=processed_dir
+            tickers=tickers, company_name_map=company_map, output_dir=processed_dir,
+            config=config,
         )
         gdelt.build_sentiment_timeseries(
             config["date_range"]["start"], config["date_range"]["end"]
@@ -111,7 +176,7 @@ def main():
     else:
         logger.info("Skipping GDELT processing as requested.")
 
-    # 5. Run FeatureEngineer
+    # 6. Run FeatureEngineer
     t0 = time.time()
     if not prices_df.empty:
         fe = FeatureEngineer(prices_df=prices_df, output_dir=processed_dir)
@@ -121,7 +186,7 @@ def main():
         logger.error("Price data is empty, skipping feature engineering.")
         features_df = None
 
-    # 6. Run SECParser
+    # 7. Run SECParser
     t0 = time.time()
     sec = SECParser(output_dir=processed_dir / "edges")
     sec_df = sec.build_supply_chain_graph()

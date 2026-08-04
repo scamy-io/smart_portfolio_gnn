@@ -17,7 +17,8 @@ class GDELTProcessor:
     """Processor for GDELT Global Knowledge Graph data."""
 
     def __init__(
-        self, tickers: List[str], company_name_map: Dict[str, str], output_dir: Path
+        self, tickers: List[str], company_name_map: Dict[str, str], output_dir: Path,
+        config: Dict = None,
     ):
         """
         Initialize the GDELT processor.
@@ -26,10 +27,12 @@ class GDELTProcessor:
             tickers (List[str]): List of tickers.
             company_name_map (Dict[str, str]): Mapping from ticker to company name.
             output_dir (Path): Directory to save processed sentiment data.
+            config (Dict, optional): YAML config dict for GDELT-specific settings.
         """
         self.tickers = tickers
         self.company_name_map = company_name_map
         self.output_dir = output_dir
+        self.config = config or {}
         self.cache_dir = output_dir.parent.parent / "raw" / "gdelt" / "cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.logger = logging.getLogger(__name__)
@@ -97,8 +100,8 @@ class GDELTProcessor:
                     "date",
                     "ticker",
                     "avg_tone",
-                    "tone_std",
-                    "num_mentions",
+                    "ToneDispersion",
+                    "NumMentions",
                     "avg_positive",
                     "avg_negative",
                     "polarity",
@@ -140,8 +143,8 @@ class GDELTProcessor:
                     "date": date,
                     "ticker": ticker,
                     "avg_tone": avg_tone,
-                    "tone_std": tone_std if not pd.isna(tone_std) else 0.0,
-                    "num_mentions": len(mentions),
+                    "ToneDispersion": tone_std if not pd.isna(tone_std) else 0.0,
+                    "NumMentions": len(mentions),
                     "avg_positive": avg_pos,
                     "avg_negative": avg_neg,
                     "polarity": polarity,
@@ -194,7 +197,7 @@ class GDELTProcessor:
         final_df = pd.concat(all_sentiments, ignore_index=True)
         final_df["date"] = pd.to_datetime(final_df["date"])
 
-        halflife = 3.0
+        halflife = float(self.config.get("gdelt", {}).get("decay_halflife_days", 3.0))
         dfs = []
         for ticker, group in final_df.groupby("ticker"):
             group = (
@@ -214,15 +217,15 @@ class GDELTProcessor:
                     decay_factor ** blocks[mask]
                 )
 
-            group["num_mentions"] = group["num_mentions"].fillna(0)
-            group["tone_std"] = group["tone_std"].fillna(0)
+            group["NumMentions"] = group["NumMentions"].fillna(0)
+            group["ToneDispersion"] = group["ToneDispersion"].fillna(0)
             dfs.append(group)
 
         result_df = pd.concat(dfs, ignore_index=True)
 
-        out_dir = self.output_dir / "sentiment"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_file = out_dir / "sentiment_daily.parquet"
+        # Save to the path that FeatureEngineer reads from
+        out_file = self.output_dir.parent / "sentiment_node_features.parquet"
+        out_file.parent.mkdir(parents=True, exist_ok=True)
         result_df.to_parquet(out_file, index=False)
         self.logger.info(f"Saved sentiment timeseries to {out_file}")
 

@@ -73,7 +73,10 @@ class FeatureEngineer:
 
             return g
 
-        self.prices_df = df.groupby("ticker", group_keys=False).apply(compute_group)
+        self.prices_df = df.groupby("ticker", group_keys=False).apply(compute_group, include_groups=False)
+        # Re-add the grouping columns that were excluded
+        self.prices_df["ticker"] = df["ticker"]
+        self.prices_df["date"] = df["date"]
         return self.prices_df
 
     def compute_log_returns(self) -> pd.DataFrame:
@@ -91,7 +94,9 @@ class FeatureEngineer:
             g["simple_return"] = (g["adj_close"] / g["adj_close"].shift(1)) - 1
             return g
 
-        self.prices_df = df.groupby("ticker", group_keys=False).apply(compute_returns)
+        self.prices_df = df.groupby("ticker", group_keys=False).apply(compute_returns, include_groups=False)
+        self.prices_df["ticker"] = df["ticker"]
+        self.prices_df["date"] = df["date"]
         return self.prices_df
 
     def merge_fundamentals(self, fundamentals_df: pd.DataFrame) -> pd.DataFrame:
@@ -154,12 +159,17 @@ class FeatureEngineer:
         if fundamentals_df is not None:
             self.merge_fundamentals(fundamentals_df)
 
-        vix_path = self.output_dir.parent.parent / "raw/macro/VIXCLS.csv"
+        vix_path = self.output_dir.parent / "raw" / "macro" / "VIXCLS.csv"
         import os
         if vix_path.exists():
             vix_df = pd.read_csv(vix_path)
             vix_df["DATE"] = pd.to_datetime(vix_df["DATE"])
             vix_df.rename(columns={"DATE": "date", "VIXCLS": "vix_level"}, inplace=True)
+            # Normalize both sides to tz-naive to prevent merge failures
+            if hasattr(self.prices_df["date"].dtype, "tz") and self.prices_df["date"].dtype.tz is not None:
+                self.prices_df["date"] = self.prices_df["date"].dt.tz_localize(None)
+            if hasattr(vix_df["date"].dtype, "tz") and vix_df["date"].dtype.tz is not None:
+                vix_df["date"] = vix_df["date"].dt.tz_localize(None)
             self.prices_df = pd.merge(self.prices_df, vix_df, on="date", how="left")
             self.prices_df["vix_level"] = self.prices_df["vix_level"].ffill().bfill()
             
@@ -213,7 +223,9 @@ class FeatureEngineer:
             return g
 
         df = self.prices_df.sort_values(by=["ticker", "date"])
-        df = df.groupby("ticker", group_keys=False).apply(normalize_group)
+        df = df.groupby("ticker", group_keys=False).apply(normalize_group, include_groups=False)
+        df["ticker"] = self.prices_df["ticker"]
+        df["date"] = self.prices_df["date"]
 
         df.set_index(["date", "ticker"], inplace=True)
 
