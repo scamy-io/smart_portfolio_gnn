@@ -151,6 +151,7 @@ class ShockSimulator:
 
         g = g.to(self.device)
 
+        # Single forward pass — predictions + cached embedding
         preds = self.model(g)
 
         w_tensor = torch.tensor(
@@ -162,69 +163,83 @@ class ShockSimulator:
         pred_ret = preds["return"]
         port_ret = (w_tensor * pred_ret).sum().item()
 
-        if hasattr(self.model, "htgat"):
+        # Use cached embedding from forward pass (no redundant second pass)
+        if hasattr(self.model, "last_embedding"):
+            z = self.model.last_embedding
+        elif hasattr(self.model, "htgat"):
             x_dict = {"stock": g["stock"].x}
             edge_index_dict = {et: g[et].edge_index for et in g.edge_types}
             edge_attr_dict = {et: g[et].edge_attr for et in g.edge_types}
             htgat_out = self.model.htgat(x_dict, edge_index_dict, edge_attr_dict)
             z = htgat_out["embedding"]
         else:
-            z = preds["embedding"]
+            z = preds.get("embedding", torch.zeros(len(tickers), 1))
 
-        z_norm = torch.nn.functional.normalize(z, p=2, dim=1)
-        cov = torch.matmul(z_norm, z_norm.t())
+        # Portfolio volatility from predicted per-asset volatilities (correct units)
+        # rather than cosine similarity (which is unitless and not calibrated)
+        pred_vol = preds["volatility"]
         port_vol = torch.sqrt(
-            torch.clamp(torch.matmul(w_tensor, torch.matmul(cov, w_tensor)), min=0.0)
+            torch.clamp((w_tensor * pred_vol).sum() ** 2, min=1e-8)
         ).item()
+
+        # Annualize: predicted vols are typically daily-scale, scale to annual
+        port_vol_annual = port_vol * np.sqrt(252)
+        port_ret_annual = port_ret * 252
 
         port_cvar = (w_tensor * preds["cvar"]).sum().item()
         worst_idx = torch.argmin(pred_ret).item()
         worst_ticker = tickers[worst_idx]
 
-        if hasattr(self.model, "htgat"):
-            z_base = self.model.htgat(
-                {"stock": graph["stock"].x.to(self.device)},
-                {et: graph[et].edge_index.to(self.device) for et in graph.edge_types},
-                {et: graph[et].edge_attr.to(self.device) for et in graph.edge_types},
-            )["embedding"]
+        # Base embedding for shift calculation (from unshocked graph)
+        if hasattr(self.model, "last_embedding"):
+            # Run the base graph to get its embedding
+            base_graph = graph.to(self.device)
+            self.model(base_graph)
+            z_base = self.model.last_embedding
         else:
-            z_base = self.model(graph.to(self.device))["embedding"]
+            z_base = z  # fallback: no shift measurable
 
-        # Simulate Geometric Brownian Motion to estimate Max Drawdown and Recovery Time
+        # Vectorized GBM simulation (500 paths) for robust drawdown estimation
         horizon = self.shock_horizon
+        n_paths = 500
         dt = 1.0 / 252.0
-        # Generate paths
-        random_shocks = torch.randn(horizon)
-        # Assuming port_ret is annualized expected return, port_vol is annualized volatility
-        drift = (port_ret - 0.5 * port_vol ** 2) * dt
-        diffusion = port_vol * np.sqrt(dt) * random_shocks
+
+        random_shocks = torch.randn(n_paths, horizon)
+        drift = (port_ret_annual - 0.5 * port_vol_annual ** 2) * dt
+        diffusion = port_vol_annual * np.sqrt(dt) * random_shocks
         log_returns = drift + diffusion
-        cum_returns = torch.exp(torch.cumsum(log_returns, dim=0))
-        
-        # Max Drawdown
-        running_max = torch.cummax(cum_returns, dim=0)[0]
-        drawdowns = (cum_returns - running_max) / running_max
-        max_drawdown = float(torch.min(drawdowns).item())
-        
-        # Recovery Time
-        # The trough is where max drawdown occurs
-        trough_idx = torch.argmin(drawdowns).item()
-        recovery_time = np.inf
-        # Find first day after trough where cum_returns crosses running_max at trough
-        if trough_idx < horizon - 1:
-            trough_val = running_max[trough_idx]
-            for t in range(trough_idx + 1, horizon):
-                if cum_returns[t] >= trough_val:
-                    recovery_time = float(t - trough_idx)
-                    break
-                    
+        cum_returns = torch.exp(torch.cumsum(log_returns, dim=1))  # [n_paths, horizon]
+
+        # Max Drawdown across all paths
+        running_max = torch.cummax(cum_returns, dim=1)[0]
+        drawdowns = (cum_returns - running_max) / (running_max + 1e-8)
+        path_max_drawdowns = drawdowns.min(dim=1).values  # [n_paths]
+
+        # Report 95th-percentile worst-case drawdown (not a single noisy sample)
+        max_drawdown = float(torch.quantile(path_max_drawdowns, 0.05).item())
+
+        # Recovery time: median across paths
+        recovery_times = []
+        for p in range(n_paths):
+            trough_idx = torch.argmin(drawdowns[p]).item()
+            rec_time = float("inf")
+            if trough_idx < horizon - 1:
+                trough_val = running_max[p, trough_idx]
+                for t in range(trough_idx + 1, horizon):
+                    if cum_returns[p, t] >= trough_val:
+                        rec_time = float(t - trough_idx)
+                        break
+            recovery_times.append(rec_time)
+        finite_recs = [r for r in recovery_times if r < float("inf")]
+        median_recovery = float(np.median(finite_recs)) if finite_recs else float("inf")
+
         return {
             "scenario": scenario,
             "portfolio_return": float(port_ret),
-            "portfolio_vol": float(port_vol),
+            "portfolio_vol": float(port_vol_annual),
             "portfolio_cvar": float(port_cvar),
             "max_drawdown": max_drawdown,
-            "recovery_time_days": float(recovery_time),
+            "recovery_time_days": median_recovery,
             "worst_ticker": worst_ticker,
             "embedding_shift": float(torch.mean(torch.norm(z - z_base, dim=1)).item()),
         }

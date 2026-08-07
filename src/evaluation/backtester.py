@@ -167,7 +167,9 @@ class WalkForwardBacktester:
 
             # G2: Risk Metrics Trajectory Tracking
             # Reconstruct Sigma_gnn for ENB
-            z_norm_tmp = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+            embed_norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+            embed_norms[embed_norms == 0] = 1.0
+            z_norm_tmp = embeddings / embed_norms
             cov_gnn_tmp = z_norm_tmp @ z_norm_tmp.T
             w_arr = current_weights.values
             enb = 1.0 / (w_arr.T @ cov_gnn_tmp @ w_arr + 1e-8)
@@ -182,16 +184,18 @@ class WalkForwardBacktester:
             sim_results = {"scenarios": []}
 
             alerts = rtc.evaluate_all(
-                date, metrics_dict, sim_results, graph, prev_graph
+                date, metrics_dict, sim_results, graph, prev_graph,
+                frequency=self.rebalance_frequency,
             )
-            is_rebal_day = rtc.check_scheduled(date, self.rebalance_frequency)
 
             traded = False
             costs = 0.0
             turnover = 0.0
 
-            if alerts or is_rebal_day:
-                z_norm = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+            if alerts:
+                rebal_norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+                rebal_norms[rebal_norms == 0] = 1.0
+                z_norm = embeddings / rebal_norms
                 cov_gnn = z_norm @ z_norm.T
 
                 cov_hist = self._compute_cov_hist(date, tickers)

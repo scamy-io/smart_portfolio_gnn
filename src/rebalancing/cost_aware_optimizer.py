@@ -95,13 +95,12 @@ class CostAwareOptimizer:
             print(f"Optimization failed: {e}. Falling back to equal weight.")
             opt_w = np.ones(n) / n
 
-        # We do NOT clip and re-normalize the successfully solved weights,
-        # as that breaks max_weight and target_hhi constraints.
-        # However, for the fallback, we ensure it's normalized.
-        # Just tiny precision cleanup without breaking constraints:
-        opt_w = np.clip(opt_w, 0, self.max_weight)
-        if not np.isclose(np.sum(opt_w), 1.0, atol=1e-4):
-            opt_w = opt_w / np.sum(opt_w)  # only if fallback or minor precision issue
+        # Precision cleanup: clamp tiny negative values from solver tolerance.
+        # Do NOT clip to max_weight here — re-normalizing after a clip undoes
+        # the constraint for small universes (N < 1/max_weight).
+        opt_w = np.maximum(opt_w, 0.0)
+        if np.sum(opt_w) > 0:
+            opt_w = opt_w / np.sum(opt_w)
 
         return pd.Series(opt_w, index=tickers)
 

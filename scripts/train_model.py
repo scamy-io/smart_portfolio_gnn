@@ -36,6 +36,7 @@ class FullModel(nn.Module):
         out = self.htgat(
             batch_data.x_dict, batch_data.edge_index_dict, batch_data.edge_attr_dict
         )
+        self.last_embedding = out["embedding"]
         return self.heads(out["embedding"])
 
 

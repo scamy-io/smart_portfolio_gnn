@@ -72,6 +72,7 @@ class RebalanceTriggerChecker:
         sim_results: Dict,
         current_graph: HeteroData,
         prev_graph: HeteroData = None,
+        frequency: str = "weekly",
     ) -> List[Dict]:
         alerts = []
 
@@ -95,7 +96,7 @@ class RebalanceTriggerChecker:
                 }
             )
 
-        if self.check_scheduled(date):
+        if self.check_scheduled(date, frequency):
             alerts.append(
                 {
                     "trigger": "scheduled",
